@@ -1,0 +1,546 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>The Unseen Axiom</title>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+        }
+        canvas {
+            display: block;
+        }
+        #ui-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #top-ui {
+            width: 100%;
+            padding: 20px;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: space-between;
+        }
+        #objectives, #inventory {
+            background-color: rgba(0,0,0,0.5);
+            padding: 10px 15px;
+            border-radius: 5px;
+            border: 1px solid #333;
+        }
+        #objectives h3, #inventory h3 {
+            margin: 0 0 5px 0;
+            font-size: 1em;
+            color: #ccc;
+        }
+        #objectives-list, #inventory-list {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+            font-size: 0.9em;
+            color: #aaa;
+        }
+        #lantern-ui {
+             color: #ffc;
+        }
+        #message-box {
+            background-color: rgba(0, 0, 0, 0.7);
+            padding: 20px;
+            border-radius: 10px;
+            border: 1px solid #444;
+            text-align: center;
+            font-size: 1.2em;
+            max-width: 80%;
+            opacity: 0;
+            transition: opacity 0.5s;
+            margin-bottom: 50px;
+        }
+        #sanity-vignette {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            box-shadow: inset 0 0 0px rgba(0, 0, 0, 0.0);
+            transition: box-shadow 1s ease-in-out;
+            pointer-events: none;
+        }
+        #start-screen, #game-over-screen, #win-screen {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: #000;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            z-index: 10;
+        }
+        h1 { font-size: 3em; color: #b00; }
+        p { font-size: 1.2em; max-width: 600px; margin: 10px; }
+        button {
+            padding: 15px 30px; font-size: 1.5em; background-color: #333;
+            color: #fff; border: 2px solid #555; border-radius: 10px;
+            cursor: pointer; pointer-events: all; margin-top: 20px;
+            transition: background-color 0.3s, border-color 0.3s;
+        }
+        button:hover:not(:disabled) { background-color: #555; border-color: #777; }
+        button:disabled { background-color: #111; color: #555; cursor: not-allowed; border-color: #333; }
+    </style>
+</head>
+<body>
+    <div id="start-screen">
+        <h1>The Unseen Axiom</h1>
+        <p>You remember fragments... a happy home, then screaming. Now, only darkness.</p>
+        <p>This place feels wrong. You have to understand what happened. You have to escape.</p>
+        <p>Controls: WASD to Move. Shift to Sprint. Mouse to Look. 'F' to toggle lantern. 'R' to reload battery. Click to interact.</p>
+        <button id="start-button">Wake Up</button>
+    </div>
+    <div id="game-over-screen" style="display: none;"><h1>Your mind shattered.</h1><button id="restart-button-lose">Try Again</button></div>
+    <div id="win-screen" style="display: none;"><h1>You know the truth. You are free.</h1><button id="restart-button-win">Play Again</button></div>
+    
+    <div id="ui-container">
+        <div id="top-ui">
+            <div id="objectives">
+                <h3>Objectives</h3>
+                <ul id="objectives-list">
+                    <li data-objective="diary">Find a diary page</li>
+                    <li data-objective="photo">Find a photograph</li>
+                    <li data-objective="drawing">Find a child's drawing</li>
+                </ul>
+            </div>
+            <div id="inventory">
+                <h3>Inventory</h3>
+                <ul id="inventory-list">
+                    <li id="lantern-ui">Lantern: 100%</li>
+                    <li id="battery-count">Spare Batteries: 1</li>
+                </ul>
+            </div>
+        </div>
+        <div id="message-box"></div>
+    </div>
+    <div id="sanity-vignette"></div>
+
+    <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js" } }</script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
+    <script type="module">
+        import * as THREE from 'three';
+        import { EffectComposer } from 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/postprocessing/EffectComposer.js';
+        import { RenderPass } from 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/postprocessing/RenderPass.js';
+        import { FilmPass } from 'https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/postprocessing/FilmPass.js';
+
+        let scene, camera, renderer, clock, composer;
+        let player, antagonist;
+        let filmPass;
+        let controlsEnabled = false, gameOver = false;
+        const PLAYER_HEIGHT = 1.7;
+        const roomSize = { width: 20, height: 10, depth: 20 };
+        let playerVelocity = new THREE.Vector3();
+        let moveState = { forward: false, backward: false, left: false, right: false, sprint: false };
+        let environmentObjects = [];
+
+        const sanityManager = {
+            value: 100, drainRateDark: 1.5, drainRateStare: 5, regenRateLight: 2,
+            update(delta, isLit, isStaring) {
+                if (isStaring) this.value -= this.drainRateStare * delta;
+                else if (!isLit) this.value -= this.drainRateDark * delta;
+                else this.value += this.regenRateLight * delta;
+                this.value = Math.max(0, Math.min(100, this.value));
+                this.updateEffects();
+                if (this.value <= 0) endGame("Your mind shattered.");
+            },
+            updateEffects() {
+                const sanityPercent = this.value / 100;
+                document.getElementById('sanity-vignette').style.boxShadow = `inset 0 0 ${150 * (1 - sanityPercent)}px rgba(0, 0, 0, ${0.9 * (1 - sanityPercent)})`;
+                if (filmPass) {
+                    filmPass.uniforms.nIntensity.value = 0.5 * (1 - sanityPercent);
+                    filmPass.uniforms.sIntensity.value = 0.4 * (1 - sanityPercent);
+                }
+                if (sanityPercent < 0.4 && audio.whispers.state !== 'started') audio.whispers.start();
+                else if (sanityPercent >= 0.4 && audio.whispers.state === 'started') audio.whispers.stop();
+            }
+        };
+
+        const tensionDirector = {
+            tension: 0,
+            update(delta) {
+                const distance = player.position.distanceTo(antagonist.position);
+                this.tension += (distance < 8 ? 5 : -2) * delta;
+                this.tension = Math.max(0, Math.min(100, this.tension));
+            }
+        };
+
+        const inventory = {
+            batteries: 1, diary: false, photo: false, drawing: false,
+            updateUI() {
+                document.getElementById('battery-count').textContent = `Spare Batteries: ${this.batteries}`;
+                if (this.diary) document.querySelector('[data-objective="diary"]').style.textDecoration = 'line-through';
+                if (this.photo) document.querySelector('[data-objective="photo"]').style.textDecoration = 'line-through';
+                if (this.drawing) document.querySelector('[data-objective="drawing"]').style.textDecoration = 'line-through';
+            }
+        };
+
+        const startScreen = document.getElementById('start-screen'), gameOverScreen = document.getElementById('game-over-screen'),
+              winScreen = document.getElementById('win-screen'), startButton = document.getElementById('start-button'),
+              restartButtonLose = document.getElementById('restart-button-lose'), restartButtonWin = document.getElementById('restart-button-win');
+        let audio;
+
+        init();
+
+        function init() {
+            startButton.disabled = true;
+            startButton.textContent = "Loading...";
+
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x000000);
+            scene.fog = new THREE.Fog(0x000000, 1, 15);
+            clock = new THREE.Clock();
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 100);
+            player = new THREE.Group();
+            player.position.set(0, PLAYER_HEIGHT, 0);
+            player.add(camera);
+            scene.add(player);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
+            composer = new EffectComposer(renderer);
+            composer.addPass(new RenderPass(scene, camera));
+            filmPass = new FilmPass(0, 0, 648, false);
+            composer.addPass(filmPass);
+            const ambientLight = new THREE.AmbientLight(0x202020);
+            scene.add(ambientLight);
+            const lanternLight = new THREE.SpotLight(0xffeebb, 1, 12, Math.PI / 4, 0.3, 2);
+            lanternLight.castShadow = true;
+            camera.add(lanternLight);
+            player.lantern = lanternLight;
+            player.lantern.visible = false;
+            player.batteryLife = 100;
+            player.batteryDrainRate = 1;
+
+            createEnvironment();
+            createAntagonist();
+            createInteractiveElements();
+            setupAudio();
+
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('click', onMouseClick);
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            window.addEventListener('resize', onWindowResize);
+            startButton.addEventListener('click', startGame);
+            restartButtonLose.addEventListener('click', () => window.location.reload());
+            restartButtonWin.addEventListener('click', () => window.location.reload());
+            
+            Tone.loaded().then(() => {
+                startButton.disabled = false;
+                startButton.textContent = "Wake Up";
+            }).catch(e => console.error("Audio loading failed:", e));
+        }
+
+        function setupAudio() {
+             audio = {
+                ambient: new Tone.Noise("brown").set({ volume: -35, fadeOut: 2 }).toDestination(),
+                jumpscare: new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.005, decay: 0.2, sustain: 0.1, release: 0.5 }, volume: 5 }).toDestination(),
+                whispers: new Tone.Noise("pink").set({ volume: -40, type: "pink" }).toDestination(),
+                scrape: new Tone.NoiseSynth({ noise: {type:'white'}, envelope:{attack:0.2, decay:0.3, sustain:0}, volume: -25 }).toDestination(),
+                pickup: new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 1 }, volume: -10 }).toDestination(),
+                lanternClick: new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 10, envelope: { attack: 0.001, decay: 0.1, release: 0.01 }, volume: -15 }).toDestination()
+             };
+        }
+        
+        function createEnvironment() { 
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.width, roomSize.depth), new THREE.MeshStandardMaterial({ color: 0x332211 }));
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+            environmentObjects.push(floor);
+
+            const wallMat = new THREE.MeshStandardMaterial({ color: 0x4a4a4a });
+            const walls = [
+                new THREE.Mesh(new THREE.BoxGeometry(roomSize.width, roomSize.height, 0.1), wallMat),
+                new THREE.Mesh(new THREE.BoxGeometry(roomSize.width, roomSize.height, 0.1), wallMat),
+                new THREE.Mesh(new THREE.BoxGeometry(0.1, roomSize.height, roomSize.depth), wallMat),
+                new THREE.Mesh(new THREE.BoxGeometry(0.1, roomSize.height, roomSize.depth), wallMat)
+            ];
+            walls[0].position.set(0, roomSize.height/2, -roomSize.depth/2);
+            walls[1].position.set(0, roomSize.height/2, roomSize.depth/2);
+            walls[2].position.set(-roomSize.width/2, roomSize.height/2, 0);
+            walls[3].position.set(roomSize.width/2, roomSize.height/2, 0);
+            walls.forEach(w => { w.receiveShadow = true; scene.add(w); environmentObjects.push(w); });
+
+            // Add furniture/obstacles
+            const crateGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
+            const crateMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21 });
+            for(let i = 0; i < 5; i++) {
+                const crate = new THREE.Mesh(crateGeo, crateMat);
+                crate.position.set(
+                    (Math.random() - 0.5) * roomSize.width * 0.8,
+                    0.75,
+                    (Math.random() - 0.5) * roomSize.depth * 0.8
+                );
+                crate.rotation.y = Math.random() * Math.PI;
+                crate.castShadow = true;
+                crate.receiveShadow = true;
+                scene.add(crate);
+                environmentObjects.push(crate);
+            }
+        }
+
+        function createAntagonist() {
+            antagonist = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 2.5, 8), new THREE.MeshBasicMaterial({ color: 0x111111 }));
+            antagonist.position.set(5, 1.25, -5);
+            antagonist.state = 'patrol';
+            antagonist.patrolTarget = new THREE.Vector3();
+            antagonist.lastKnownPlayerPosition = new THREE.Vector3();
+            antagonist.speed = 1.5;
+            setNewPatrolTarget();
+            scene.add(antagonist);
+        }
+        
+        function setNewPatrolTarget() {
+             antagonist.patrolTarget.set((Math.random() - 0.5) * (roomSize.width - 2), 1.25, (Math.random() - 0.5) * (roomSize.depth - 2));
+        }
+
+        function createInteractiveElements() {
+             const items = [
+                { type: 'objective', name: 'diary', pos: new THREE.Vector3(-8, 0.15, 4), text: "A diary page... 'The scratching... it's in the walls. It's always in the walls.'" },
+                { type: 'objective', name: 'photo', pos: new THREE.Vector3(8, 0.15, 8), text: "A faded photo of a family. They look happy. A dark smudge covers one face." },
+                { type: 'objective', name: 'drawing', pos: new THREE.Vector3(0, 0.15, -8), text: "A child's drawing of a tall, dark figure. 'Mr. Giggles' is written underneath." },
+                { type: 'battery', pos: new THREE.Vector3(-5, 0.15, -7) },
+                { type: 'battery', pos: new THREE.Vector3(7, 0.15, 2) },
+             ];
+             items.forEach(itemData => {
+                 const item = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.3, 0.05), new THREE.MeshBasicMaterial({ color: itemData.type === 'battery' ? 0x99ff99 : 0xffcc99 }));
+                 item.position.copy(itemData.pos);
+                 item.userData = itemData;
+                 scene.add(item);
+             });
+        }
+
+        async function startGame() {
+            if (Tone.context.state !== 'running') await Tone.start();
+            startScreen.style.display = 'none';
+            document.body.requestPointerLock();
+            controlsEnabled = true;
+            audio.ambient.start();
+            animate();
+        }
+
+        function onKeyDown(event) {
+            if (!controlsEnabled) return;
+            switch(event.code) {
+                case 'KeyW': moveState.forward = true; break;
+                case 'KeyS': moveState.backward = true; break;
+                case 'KeyA': moveState.left = true; break;
+                case 'KeyD': moveState.right = true; break;
+                case 'ShiftLeft': moveState.sprint = true; break;
+                case 'KeyF':
+                    player.lantern.visible = !player.lantern.visible && player.batteryLife > 0;
+                    audio.lanternClick.triggerAttackRelease("C4", "8n");
+                    break;
+                case 'KeyR': reloadLantern(); break;
+            }
+        }
+        
+        function onKeyUp(event) {
+             switch(event.code) {
+                case 'KeyW': moveState.forward = false; break;
+                case 'KeyS': moveState.backward = false; break;
+                case 'KeyA': moveState.left = false; break;
+                case 'KeyD': moveState.right = false; break;
+                case 'ShiftLeft': moveState.sprint = false; break;
+            }
+        }
+        
+        function reloadLantern() {
+            if (inventory.batteries > 0) {
+                inventory.batteries--;
+                player.batteryLife = 100;
+                showMessage("Reloaded the lantern.", 2000);
+                inventory.updateUI();
+            } else {
+                showMessage("No spare batteries!", 2000);
+            }
+        }
+
+        function updatePlayer(delta) {
+            if (player.lantern.visible) {
+                player.batteryLife -= player.batteryDrainRate * (moveState.sprint ? 2.5 : 1) * delta;
+                if (player.batteryLife <= 0) {
+                    player.batteryLife = 0;
+                    player.lantern.visible = false;
+                    showMessage("My lantern died!", 3000);
+                }
+            }
+            document.getElementById('lantern-ui').textContent = `Lantern: ${Math.round(player.batteryLife)}%`;
+            
+            const currentSpeed = moveState.sprint ? 8.0 : 4.0;
+            playerVelocity.x -= playerVelocity.x * 10.0 * delta;
+            playerVelocity.z -= playerVelocity.z * 10.0 * delta;
+            
+            const direction = new THREE.Vector3();
+            direction.z = Number(moveState.forward) - Number(moveState.backward);
+            direction.x = Number(moveState.left) - Number(moveState.right);
+            direction.normalize();
+
+            playerVelocity.x += direction.x * currentSpeed * delta;
+            playerVelocity.z += direction.z * currentSpeed * delta;
+            
+            player.translateX(playerVelocity.x);
+            player.translateZ(playerVelocity.z);
+
+            const halfWidth = roomSize.width / 2 - 0.5;
+            const halfDepth = roomSize.depth / 2 - 0.5;
+            player.position.x = Math.max(-halfWidth, Math.min(halfWidth, player.position.x));
+            player.position.z = Math.max(-halfDepth, Math.min(halfDepth, player.position.z));
+            player.position.y = PLAYER_HEIGHT;
+        }
+        
+        function updateAntagonist(delta) {
+            const isLooking = isAntagonistVisible();
+            if (isLooking) {
+                antagonist.lastKnownPlayerPosition.copy(player.position);
+                return;
+            }
+            
+            const distanceToPlayer = antagonist.position.distanceTo(player.position);
+            if (distanceToPlayer < 1.0) return endGame("It caught you.");
+
+            if (tensionDirector.tension > 50 && distanceToPlayer < 10) {
+                 antagonist.state = 'hunting';
+                 antagonist.lastKnownPlayerPosition.copy(player.position);
+            }
+            
+            if (antagonist.state === 'hunting') {
+                 const direction = new THREE.Vector3().subVectors(antagonist.lastKnownPlayerPosition, antagonist.position).normalize();
+                 antagonist.position.add(direction.multiplyScalar(antagonist.speed * 1.5 * delta));
+                 if (antagonist.position.distanceTo(antagonist.lastKnownPlayerPosition) < 1) antagonist.state = 'patrol';
+            } else if (antagonist.state === 'patrol') {
+                if(antagonist.position.distanceTo(antagonist.patrolTarget) < 1) {
+                    setNewPatrolTarget();
+                } else {
+                     const direction = new THREE.Vector3().subVectors(antagonist.patrolTarget, antagonist.position).normalize();
+                     antagonist.position.add(direction.multiplyScalar(antagonist.speed * delta));
+                }
+            }
+        }
+
+        function isAntagonistVisible() {
+             const screenPos = antagonist.position.clone().project(camera);
+             if (screenPos.x < -1 || screenPos.x > 1 || screenPos.y < -1 || screenPos.y > 1) {
+                return false; // Not on screen
+             }
+
+             const raycaster = new THREE.Raycaster();
+             raycaster.setFromCamera({x: screenPos.x, y: screenPos.y}, camera);
+             const intersects = raycaster.intersectObjects(environmentObjects);
+             if (intersects.length > 0) {
+                 const distanceToAntagonist = player.position.distanceTo(antagonist.position);
+                 if (intersects[0].distance < distanceToAntagonist) {
+                     return false; // Obstructed
+                 }
+             }
+             return true;
+        }
+
+        function endGame(message) {
+            if (gameOver) return;
+            gameOver = true; controlsEnabled = false;
+            if (document.pointerLockElement) document.exitPointerLock();
+            gameOverScreen.querySelector('h1').textContent = message;
+            gameOverScreen.style.display = 'flex';
+            audio.ambient.stop();
+            if (audio.whispers.state === 'started') audio.whispers.stop();
+            audio.jumpscare.triggerAttackRelease("4n");
+        }
+
+        function winGame() {
+            if (gameOver) return;
+            gameOver = true; controlsEnabled = false;
+            if (document.pointerLockElement) document.exitPointerLock();
+            winScreen.style.display = 'flex';
+            audio.ambient.stop();
+            if (audio.whispers.state === 'started') audio.whispers.stop();
+        }
+
+        function onMouseMove(e) { 
+            if(controlsEnabled){ 
+                player.rotation.y -= e.movementX * 0.002; 
+                camera.rotation.x -= e.movementY * 0.002; 
+                camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x)); 
+            } 
+        }
+
+        function onWindowResize() { 
+            camera.aspect = window.innerWidth / window.innerHeight; 
+            camera.updateProjectionMatrix(); 
+            renderer.setSize(window.innerWidth, window.innerHeight); 
+            composer.setSize(window.innerWidth, window.innerHeight); 
+        }
+
+        function onMouseClick() {
+             if (!controlsEnabled) return;
+             const raycaster = new THREE.Raycaster();
+             raycaster.setFromCamera({x:0, y:0}, camera);
+             const intersects = raycaster.intersectObjects(scene.children);
+             for (const intersect of intersects) {
+                 if (intersect.distance > 3) continue;
+                 const obj = intersect.object;
+                 if (obj.userData.type) {
+                     if (obj.userData.type === 'battery') {
+                         inventory.batteries++;
+                         scene.remove(obj);
+                         showMessage("Found a spare battery.", 2000);
+                     } else if (obj.userData.type === 'objective') {
+                         inventory[obj.userData.name] = true;
+                         showMessage(obj.userData.text, 5000);
+                         scene.remove(obj);
+                     }
+                     audio.pickup.triggerAttackRelease("C5", "8n");
+                     inventory.updateUI();
+                     if (inventory.diary && inventory.photo && inventory.drawing) {
+                        winGame();
+                     }
+                     return;
+                 }
+             }
+        }
+        
+        function showMessage(text, duration = 3000) {
+            const msgBox = document.getElementById('message-box');
+            msgBox.textContent = text;
+            msgBox.style.opacity = 1;
+            setTimeout(() => { if (msgBox.textContent === text) msgBox.style.opacity = 0; }, duration);
+        }
+
+        function animate() {
+            if (gameOver) return;
+            requestAnimationFrame(animate);
+            const delta = clock.getDelta();
+            const isLookingAtAntagonist = isAntagonistVisible() && player.position.distanceTo(antagonist.position) < 10;
+            
+            updatePlayer(delta);
+            sanityManager.update(delta, player.lantern.visible, isLookingAtAntagonist);
+            tensionDirector.update(delta);
+            updateAntagonist(delta);
+            
+            composer.render();
+        }
+    </script>
+</body>
+</html>
