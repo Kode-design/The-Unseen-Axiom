@@ -55,6 +55,25 @@
         #lantern-ui {
              color: #ffc;
         }
+        #crosshair {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 20px;
+            height: 20px;
+            margin-left: -10px;
+            margin-top: -10px;
+            pointer-events: none;
+            z-index: 5;
+            display: none;
+        }
+        #crosshair::before, #crosshair::after {
+            content: '';
+            position: absolute;
+            background: #fff;
+        }
+        #crosshair::before { left: 9px; top: 0; width: 2px; height: 20px; }
+        #crosshair::after { top: 9px; left: 0; width: 20px; height: 2px; }
         #message-box {
             background-color: rgba(0, 0, 0, 0.7);
             padding: 20px;
@@ -135,6 +154,7 @@
         <div id="message-box"></div>
     </div>
     <div id="sanity-vignette"></div>
+    <div id="crosshair"></div>
 
     <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js" } }</script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.7.77/Tone.js"></script>
@@ -153,6 +173,7 @@
         let playerVelocity = new THREE.Vector3();
         let moveState = { forward: false, backward: false, left: false, right: false, sprint: false };
         let environmentObjects = [];
+        let footstepTimer = 0;
 
         const sanityManager = {
             value: 100, drainRateDark: 1.5, drainRateStare: 5, regenRateLight: 2,
@@ -235,6 +256,7 @@
             createEnvironment();
             createAntagonist();
             createInteractiveElements();
+            inventory.updateUI();
             setupAudio();
 
             document.addEventListener('mousemove', onMouseMove);
@@ -253,13 +275,14 @@
         }
 
         function setupAudio() {
-             audio = {
+            audio = {
                 ambient: new Tone.Noise("brown").set({ volume: -35, fadeOut: 2 }).toDestination(),
                 jumpscare: new Tone.NoiseSynth({ noise: { type: "white" }, envelope: { attack: 0.005, decay: 0.2, sustain: 0.1, release: 0.5 }, volume: 5 }).toDestination(),
                 whispers: new Tone.Noise("pink").set({ volume: -40, type: "pink" }).toDestination(),
                 scrape: new Tone.NoiseSynth({ noise: {type:'white'}, envelope:{attack:0.2, decay:0.3, sustain:0}, volume: -25 }).toDestination(),
                 pickup: new Tone.Synth({ oscillator: { type: 'sine' }, envelope: { attack: 0.005, decay: 0.1, sustain: 0.3, release: 1 }, volume: -10 }).toDestination(),
-                lanternClick: new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 10, envelope: { attack: 0.001, decay: 0.1, release: 0.01 }, volume: -15 }).toDestination()
+                lanternClick: new Tone.MembraneSynth({ pitchDecay: 0.01, octaves: 10, envelope: { attack: 0.001, decay: 0.1, release: 0.01 }, volume: -15 }).toDestination(),
+                footstep: new Tone.MembraneSynth({ pitchDecay: 0.05, octaves: 4, envelope: { attack: 0.001, decay: 0.1, sustain: 0.01, release: 0.1 }, volume: -10 }).toDestination()
              };
         }
         
@@ -329,14 +352,16 @@
                  item.position.copy(itemData.pos);
                  item.userData = itemData;
                  scene.add(item);
+                 environmentObjects.push(item);
              });
         }
 
-        async function startGame() {
+async function startGame() {
             if (Tone.context.state !== 'running') await Tone.start();
             startScreen.style.display = 'none';
             document.body.requestPointerLock();
             controlsEnabled = true;
+            document.getElementById('crosshair').style.display = 'block';
             audio.ambient.start();
             animate();
         }
@@ -392,11 +417,21 @@
             const currentSpeed = moveState.sprint ? 8.0 : 4.0;
             playerVelocity.x -= playerVelocity.x * 10.0 * delta;
             playerVelocity.z -= playerVelocity.z * 10.0 * delta;
-            
+
             const direction = new THREE.Vector3();
             direction.z = Number(moveState.forward) - Number(moveState.backward);
             direction.x = Number(moveState.left) - Number(moveState.right);
             direction.normalize();
+
+            if (direction.lengthSq() > 0) {
+                footstepTimer -= delta;
+                if (footstepTimer <= 0) {
+                    audio.footstep.triggerAttackRelease("C2", "16n");
+                    footstepTimer = moveState.sprint ? 0.25 : 0.5;
+                }
+            } else {
+                footstepTimer = 0;
+            }
 
             playerVelocity.x += direction.x * currentSpeed * delta;
             playerVelocity.z += direction.z * currentSpeed * delta;
@@ -462,6 +497,7 @@
             if (gameOver) return;
             gameOver = true; controlsEnabled = false;
             if (document.pointerLockElement) document.exitPointerLock();
+            document.getElementById('crosshair').style.display = 'none';
             gameOverScreen.querySelector('h1').textContent = message;
             gameOverScreen.style.display = 'flex';
             audio.ambient.stop();
@@ -473,6 +509,7 @@
             if (gameOver) return;
             gameOver = true; controlsEnabled = false;
             if (document.pointerLockElement) document.exitPointerLock();
+            document.getElementById('crosshair').style.display = 'none';
             winScreen.style.display = 'flex';
             audio.ambient.stop();
             if (audio.whispers.state === 'started') audio.whispers.stop();
