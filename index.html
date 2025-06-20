@@ -238,15 +238,18 @@
             scene.add(player);
             renderer = new THREE.WebGLRenderer({ antialias: true });
             renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            renderer.shadowMap.type = THREE.PCFSoftShadowMap;
             document.body.appendChild(renderer.domElement);
             composer = new EffectComposer(renderer);
             composer.addPass(new RenderPass(scene, camera));
             filmPass = new FilmPass(0, 0, 648, false);
             composer.addPass(filmPass);
-            const ambientLight = new THREE.AmbientLight(0x202020);
+            const ambientLight = new THREE.AmbientLight(0x404040);
             scene.add(ambientLight);
-            const lanternLight = new THREE.SpotLight(0xffeebb, 1, 12, Math.PI / 4, 0.3, 2);
+            const lanternLight = new THREE.SpotLight(0xffeebb, 1, 12, Math.PI / 4, 0.6, 1.5);
             lanternLight.castShadow = true;
+            lanternLight.penumbra = 0.4;
             camera.add(lanternLight);
             player.lantern = lanternLight;
             player.lantern.visible = false;
@@ -287,7 +290,7 @@
         }
         
         function createEnvironment() { 
-            const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.width, roomSize.depth), new THREE.MeshStandardMaterial({ color: 0x332211 }));
+            const floor = new THREE.Mesh(new THREE.PlaneGeometry(roomSize.width, roomSize.depth), new THREE.MeshStandardMaterial({ color: 0x3a3a3a }));
             floor.rotation.x = -Math.PI / 2;
             floor.receiveShadow = true;
             scene.add(floor);
@@ -308,7 +311,7 @@
 
             // Add furniture/obstacles
             const crateGeo = new THREE.BoxGeometry(1.5, 1.5, 1.5);
-            const crateMat = new THREE.MeshStandardMaterial({ color: 0x5c3a21 });
+            const crateMat = new THREE.MeshStandardMaterial({ color: 0x555555 });
             for(let i = 0; i < 5; i++) {
                 const crate = new THREE.Mesh(crateGeo, crateMat);
                 crate.position.set(
@@ -325,8 +328,20 @@
         }
 
         function createAntagonist() {
-            antagonist = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.3, 2.5, 8), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-            antagonist.position.set(5, 1.25, -5);
+            const mat = new THREE.MeshStandardMaterial({ color: 0x111111, roughness: 0.7 });
+            antagonist = new THREE.Group();
+            const body = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.5, 2, 8), mat);
+            const head = new THREE.Mesh(new THREE.SphereGeometry(0.4, 16, 16), mat);
+            head.position.y = 1.2;
+            const leftArm = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.1, 1.5, 6), mat);
+            leftArm.position.set(-0.5, 0.5, 0);
+            leftArm.rotation.z = Math.PI / 4;
+            const rightArm = leftArm.clone();
+            rightArm.position.x = 0.5;
+            rightArm.rotation.z = -Math.PI / 4;
+            body.castShadow = head.castShadow = leftArm.castShadow = rightArm.castShadow = true;
+            antagonist.add(body, head, leftArm, rightArm);
+            antagonist.position.set(5, 1, -5);
             antagonist.state = 'patrol';
             antagonist.patrolTarget = new THREE.Vector3();
             antagonist.lastKnownPlayerPosition = new THREE.Vector3();
@@ -411,6 +426,12 @@ async function startGame() {
                     player.lantern.visible = false;
                     showMessage("My lantern died!", 3000);
                 }
+                if (player.batteryLife < 30) {
+                    const flicker = (Math.random() - 0.5) * (1 - player.batteryLife / 30) * 0.5;
+                    player.lantern.intensity = 1 + flicker;
+                } else {
+                    player.lantern.intensity = 1;
+                }
             }
             document.getElementById('lantern-ui').textContent = `Lantern: ${Math.round(player.batteryLife)}%`;
             
@@ -419,8 +440,8 @@ async function startGame() {
             playerVelocity.z -= playerVelocity.z * 10.0 * delta;
 
             const direction = new THREE.Vector3();
-            direction.z = Number(moveState.forward) - Number(moveState.backward);
-            direction.x = Number(moveState.left) - Number(moveState.right);
+            direction.z = Number(moveState.backward) - Number(moveState.forward);
+            direction.x = Number(moveState.right) - Number(moveState.left);
             direction.normalize();
 
             if (direction.lengthSq() > 0) {
